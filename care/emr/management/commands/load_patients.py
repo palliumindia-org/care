@@ -92,26 +92,6 @@ class Command(BaseCommand):
             }
         )
 
-        phone_config, _ = PatientIdentifierConfig.objects.get_or_create(
-            facility=None,
-            config__system="system.care.ohc.network/patient-phone-number",
-            defaults={
-                "status": "active",
-                "config": {
-                    "use": "official",
-                    "description": "Patient phone number identifier",
-                    "system": "system.care.ohc.network/patient-phone-number",
-                    "required": False,
-                    "unique": True,
-                    "regex": r"^\+\d{1,3}\d{8,14}$",
-                    "display": "Phone Number",
-                    "auto_maintained": False,
-                    "created_by": care_user.id,
-                    "updated_by": care_user.id,
-                }
-            }
-        )
-
 
         # Start transaction for safety
         with transaction.atomic():
@@ -262,57 +242,6 @@ class Command(BaseCommand):
                 else:
                     self.stdout.write(self.style.NOTICE("No Pallium identifiers to create."))
 
-            # --- create PatientIdentifier objects for Phone Number ---
-            phone_identifiers = []
-            phone_error_count = 0
-
-            for patient, orig_row in zip(patients, original_rows):
-                try:
-                    phone_value = patient.phone_number.strip() if patient.phone_number else ""
-
-                    # skip if no phone number
-                    if not phone_value:
-                        continue
-
-                    # uniqueness check
-                    exists = PatientIdentifier.objects.filter(
-                        config=phone_config,
-                        value=phone_value
-                    ).exists()
-
-                    if exists:
-                        error_rows.append({
-                            **orig_row,
-                            "error": f"Phone number identifier already exists: {phone_value}"
-                        })
-                        phone_error_count += 1
-                        continue
-
-                    pi = PatientIdentifier(
-                        patient=patient,
-                        config=phone_config,
-                        value=phone_value
-                    )
-                    phone_identifiers.append(pi)
-
-                except Exception as e:
-                    error_rows.append({**orig_row, "error": f"Failed to prepare phone identifier: {e}"})
-                    phone_error_count += 1
-
-            if phone_identifiers:
-                PatientIdentifier.objects.bulk_create(phone_identifiers, batch_size=1000)
-                self.stdout.write(self.style.SUCCESS(
-                    f"Created {len(phone_identifiers)} phone number identifiers."
-                ))
-            else:
-                if phone_error_count:
-                    self.stdout.write(self.style.WARNING(
-                        f"No phone number identifiers created due to {phone_error_count} errors."
-                    ))
-                else:
-                    self.stdout.write(self.style.NOTICE("No phone number identifiers to create."))
-
-
             # --- update identifiers for all patients using pagination (your existing logic) ---
             paginator = Paginator(Patient.objects.all().order_by("id"), 5000)
             total_pages = paginator.num_pages
@@ -332,6 +261,7 @@ class Command(BaseCommand):
                 for patient in page.object_list:
                     try:
                         FacilityPatientNameIdentifierConfig.update_identifier(patient, facility)
+                        PhoneNumberIdentifierConfig.update_identifier(patient)
                         patient.build_instance_identifiers()
                         patient.build_facility_identifiers(facility.id)
                         updated_patients.append(patient)
@@ -358,4 +288,3 @@ class Command(BaseCommand):
                     rowinfo = f"Row {err.get('row', '?')}"
                     name = err.get("name") or err.get("Name") or ""
                     self.stdout.write(f"⚠️ {rowinfo} — {name} — {err.get('error')}")
-
